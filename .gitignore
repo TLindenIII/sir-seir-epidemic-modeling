@@ -1,0 +1,14 @@
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+.streamlit/secrets.toml
+.env
+
+figures/*.html
+scratch/
+notes/
