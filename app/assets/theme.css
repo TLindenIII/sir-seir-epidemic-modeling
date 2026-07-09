@@ -252,6 +252,17 @@ body::before {
   text-transform: uppercase;
 }
 
+.cta-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 58px;
+  padding: 0 22px;
+  border: 1px solid var(--line);
+  font-family: "Space Grotesk", sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .watch-pill {
   display: inline-flex;
   align-items: center;

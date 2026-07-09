@@ -52,28 +52,6 @@ METRIC_FIELDS = [
     ("Final outbreak share", "final-share"),
     ("Time to extinction", "extinction"),
 ]
-BENCHMARK_ROWS = [
-    {
-        "Profile": "baseline",
-        "Change": "Everything rides the same live Python callback.",
-    },
-    {
-        "Profile": "step1_no_live_table",
-        "Change": "Simulation tables leave the drag path.",
-    },
-    {
-        "Profile": "step2_split_callbacks",
-        "Change": "Live visuals use drag_value while heavy tables wait for mouseup.",
-    },
-    {
-        "Profile": "step3_lightweight_figure",
-        "Change": "The live path redraws a smaller figure payload.",
-    },
-    {
-        "Profile": "step4_clientside",
-        "Change": "Live SIR and SEIR updates run in browser-side JavaScript.",
-    },
-]
 
 
 def slider_block(
@@ -175,17 +153,6 @@ def scenario_summary_rows(results: dict[str, object]) -> list[dict[str, str]]:
     return rows
 
 
-def profile_badge() -> html.Div:
-    return html.Div(
-        className="profile-badge",
-        children=[
-            html.Div("Active live path", className="profile-kicker"),
-            html.Div(PROFILE.label, className="profile-name"),
-            html.Div(PROFILE.description, className="profile-copy"),
-        ],
-    )
-
-
 def build_home_tab() -> html.Div:
     sir_result = run_sir(
         population=10_000,
@@ -236,19 +203,19 @@ def build_home_tab() -> html.Div:
                             html.Div(className="hero-slash"),
                             html.P(
                                 "Study outbreak dynamics with a fast deterministic core, compare "
-                                "interventions, and inspect how each performance optimization "
-                                "changes the live interaction path.",
+                                "interventions, and move between SIR, SEIR, sensitivity, and "
+                                "scenario views without leaving the same interface.",
                                 className="hero-copy",
                             ),
                             html.Div(
                                 className="hero-actions",
                                 children=[
-                                    html.A("Run benchmarks", href="#performance-lab", className="cta-button"),
+                                    html.Div("Use the tabs above to explore the models", className="cta-tag"),
                                     html.Div(
                                         className="watch-pill",
                                         children=[
                                             html.Div("PY", className="watch-avatar"),
-                                            html.Span("Python core, browser live path"),
+                                            html.Span("Python simulation core, live browser updates"),
                                         ],
                                     ),
                                 ],
@@ -262,9 +229,12 @@ def build_home_tab() -> html.Div:
                             html.Div(
                                 className="hero-visual-caption",
                                 children=[
-                                    html.Div("Current mode", className="visual-kicker"),
-                                    html.Div(PROFILE.label, className="visual-title"),
-                                    html.Div(PROFILE.description, className="visual-copy"),
+                                    html.Div("Interactive view", className="visual-kicker"),
+                                    html.Div("Epidemic curves in motion", className="visual-title"),
+                                    html.Div(
+                                        "Drag the model parameters and watch the outbreak reshape in real time.",
+                                        className="visual-copy",
+                                    ),
                                 ],
                             ),
                         ],
@@ -284,15 +254,15 @@ def build_home_tab() -> html.Div:
                     html.Div(
                         className="footer-chip",
                         children=[
-                            html.Div("Live path", className="footer-label"),
-                            html.Div(PROFILE.name, className="footer-value"),
+                            html.Div("Views", className="footer-label"),
+                            html.Div("Models, scenarios, sensitivity, comparison", className="footer-value"),
                         ],
                     ),
                     html.Div(
                         className="footer-chip",
                         children=[
-                            html.Div("Benchmark command", className="footer-label"),
-                            html.Div("python scripts/benchmark_profiles.py", className="footer-value code-inline"),
+                            html.Div("Interface", className="footer-label"),
+                            html.Div("Dash app with live slider-driven updates", className="footer-value"),
                         ],
                     ),
                 ],
@@ -336,21 +306,36 @@ def build_home_tab() -> html.Div:
                 ],
             ),
             html.Div(
-                id="performance-lab",
                 className="card-grid card-grid--lab",
                 children=[
-                    profile_badge(),
+                    html.Div(
+                        className="panel-card",
+                        children=[
+                            html.H3("How to explore"),
+                            html.Ul(
+                                className="feature-list",
+                                children=[
+                                    html.Li("Use the SIR and SEIR tabs to inspect individual compartment dynamics."),
+                                    html.Li("Open Scenario Simulator to compare intervention timing and strength."),
+                                    html.Li("Use Parameter Sensitivity for heatmap-level pattern scanning."),
+                                    html.Li("Compare SIR vs SEIR directly to see how a latent compartment changes timing."),
+                                ],
+                            ),
+                        ],
+                    ),
                     html.Div(
                         className="panel-card panel-card--wide",
                         children=[
-                            html.H3("Optimization ladder"),
+                            html.H3("Why this belongs in a portfolio"),
                             html.P(
-                                "The benchmark script compares the current server or browser live path "
-                                "against every optimization step in sequence.",
+                                "This project demonstrates mathematical modeling, scientific computing, "
+                                "interactive visualization, and clear public-facing explanation in one artifact.",
                                 className="section-note",
                             ),
-                            data_table("benchmark-step-table", ["Profile", "Change"], page_size=6),
-                            dcc.Store(id="benchmark-step-store", data=BENCHMARK_ROWS),
+                            html.Div(
+                                className="equation-line",
+                                children="A good outbreak model is only useful if the assumptions stay legible while the parameters move.",
+                            ),
                         ],
                     ),
                 ],
@@ -660,10 +645,10 @@ def create_app() -> Dash:
                             html.Div(
                                 className="topbar-links",
                                 children=[
-                                    html.Div("MODELS", className="nav-link"),
-                                    html.Div("BENCHMARKS", className="nav-link"),
+                            html.Div("MODELS", className="nav-link"),
+                                    html.Div("SCENARIOS", className="nav-link"),
                                     html.Div("MATH", className="nav-link"),
-                                    html.Div(PROFILE.label, className="nav-cta"),
+                                    html.Div("LIVE", className="nav-cta"),
                                 ],
                             ),
                         ],
@@ -692,10 +677,6 @@ def create_app() -> Dash:
 def register_data_callbacks():
     @callback(Output("home-comparison-table", "data"), Input("home-comparison-store", "data"))
     def hydrate_home_table(rows):
-        return rows
-
-    @callback(Output("benchmark-step-table", "data"), Input("benchmark-step-store", "data"))
-    def hydrate_benchmark_table(rows):
         return rows
 
     @callback(Output("assumption-table", "data"), Input("assumption-store", "data"))
