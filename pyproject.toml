@@ -5,16 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sir-seir-epidemic-modeling"
 version = "0.1.0"
-description = "Interactive SIR and SEIR epidemic modeling with fast simulations and a Streamlit dashboard."
+description = "Interactive SIR and SEIR epidemic modeling with fast simulations and a live-updating Dash dashboard."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Thomas" }]
 dependencies = [
+  "dash>=3.0.0",
   "numpy>=2.0.0",
   "pandas>=2.2.0",
   "plotly>=6.0.0",
-  "streamlit>=1.45.0",
 ]
 
 [project.optional-dependencies]
@@ -30,5 +30,5 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
 testpaths = ["tests"]

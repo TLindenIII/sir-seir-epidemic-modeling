@@ -6,8 +6,9 @@ __pycache__/
 *.pyc
 *.egg-info/
 
-.streamlit/secrets.toml
 .env
+.playwright-cli/
+output/playwright/
 
 figures/*.html
 scratch/
