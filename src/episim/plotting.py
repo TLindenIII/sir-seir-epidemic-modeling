@@ -28,15 +28,15 @@ def _figure_layout(title: str, height: int = 500) -> dict:
     return {
         "template": "plotly_dark",
         "height": height,
-        "margin": {"l": 20, "r": 20, "t": 56, "b": 24},
-        "title": {"text": title, "x": 0.02},
+        "margin": {"l": 20, "r": 20, "t": 92, "b": 24},
+        "title": {"text": title, "x": 0.02, "y": 0.97, "pad": {"b": 22}},
         "paper_bgcolor": "rgba(0, 0, 0, 0)",
         "plot_bgcolor": "rgba(0, 0, 0, 0)",
         "font": {"family": "IBM Plex Sans, sans-serif", "color": "#f5f0ea"},
         "legend": {
             "orientation": "h",
             "yanchor": "bottom",
-            "y": 1.02,
+            "y": 1.01,
             "xanchor": "left",
             "x": 0.0,
         },
@@ -117,13 +117,20 @@ def scenario_comparison_figure(
 ) -> go.Figure:
     figure = go.Figure()
     for label, result in scenarios.items():
+        color_key = next(
+            (name for name in SCENARIO_COLORS if label.startswith(name)),
+            None,
+        )
         figure.add_trace(
             go.Scatter(
                 x=result.time,
                 y=result.compartments["Infectious"],
                 mode="lines",
                 name=label,
-                line={"width": 3, "color": SCENARIO_COLORS.get(label, "#475569")},
+                line={
+                    "width": 3,
+                    "color": SCENARIO_COLORS.get(color_key or "", "#475569"),
+                },
             )
         )
 

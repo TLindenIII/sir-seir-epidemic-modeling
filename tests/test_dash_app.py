@@ -1,8 +1,9 @@
 from dash import dcc
 import pandas as pd
 
-from app.dash_app import comparison_rows, create_app, metric_grid
+from app.dash_app import comparison_rows, create_app, data_table, metric_grid
 from episim.dashboard import PROFILE_MAP, parameter_rows
+from episim.presets import PRESET_BY_KEY, preset_options
 from episim.simulation import run_sir
 
 
@@ -45,7 +46,7 @@ def test_parameter_rows_formats_missing_intervention_day():
         intervention_day=None,
     )
     rows = parameter_rows(result.parameters)
-    intervention_row = next(row for row in rows if row["Parameter"] == "intervention_day")
+    intervention_row = next(row for row in rows if row["Parameter"] == "Intervention day: tᵢ")
     assert intervention_row["Value"] == "None"
 
 
@@ -70,3 +71,14 @@ def test_profile_map_contains_all_optimization_steps():
         "step3_lightweight_figure",
         "step4_clientside",
     }
+
+
+def test_tables_are_not_sortable_by_default():
+    table = data_table("example-table", ["A", "B"])
+    assert table.sort_action == "none"
+
+
+def test_preset_options_match_registered_presets():
+    options = preset_options()
+    assert len(options) == len(PRESET_BY_KEY)
+    assert {option["value"] for option in options} == set(PRESET_BY_KEY)

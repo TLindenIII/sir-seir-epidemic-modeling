@@ -15,6 +15,7 @@ from dash import (
     dash_table,
     dcc,
     html,
+    no_update,
 )
 
 from episim.dashboard import (
@@ -27,6 +28,7 @@ from episim.dashboard import (
     table_bundle,
 )
 from episim.plotting import compartment_figure, scenario_comparison_figure, sensitivity_heatmap
+from episim.presets import DISEASE_PRESETS, PRESET_BY_KEY, preset_options
 from episim.simulation import run_seir, run_sir
 from episim.utils import compare_models, summarize_simulation
 
@@ -54,6 +56,66 @@ METRIC_FIELDS = [
 ]
 
 
+def preset_parameter_text(preset) -> str:
+    values = [f"beta {preset.beta:.3f}", f"gamma {preset.gamma:.3f}"]
+    if preset.sigma is not None:
+        values.append(f"sigma {preset.sigma:.3f}")
+    return " · ".join(values)
+
+
+def preset_links(citations) -> list[html.Component]:
+    children: list[html.Component] = []
+    for index, citation in enumerate(citations):
+        if index:
+            children.append(html.Span(" · ", className="citation-separator"))
+        children.append(
+            html.A(
+                citation.label,
+                href=citation.url,
+                target="_blank",
+                rel="noreferrer",
+                className="citation-link",
+            )
+        )
+    return children
+
+
+def preset_card(preset) -> html.Div:
+    return html.Div(
+        className="preset-card",
+        children=[
+            html.Div(preset.model_hint, className="preset-kicker"),
+            html.H4(preset.disease, className="preset-title"),
+            html.Div(preset_parameter_text(preset), className="preset-parameters"),
+            html.P(preset.note, className="preset-note"),
+            html.Div(className="preset-links", children=preset_links(preset.citations)),
+        ],
+    )
+
+
+def preset_control(model_name: str) -> html.Div:
+    prefix = model_name.lower()
+    note = (
+        "Loads literature-backed beta and gamma values from the selected disease preset."
+        if model_name == "SIR"
+        else "Loads literature-backed beta, sigma, and gamma values from the selected disease preset."
+    )
+    return html.Div(
+        className="control-block",
+        children=[
+            html.Div("Literature preset", className="control-label"),
+            dcc.Dropdown(
+                id=f"{prefix}-preset",
+                options=preset_options(),
+                placeholder="Select a disease preset",
+                clearable=True,
+                className="preset-dropdown",
+            ),
+            html.Div(note, className="mini-note"),
+        ],
+    )
+
+
 def slider_block(
     label: str,
     component_id: str,
@@ -74,7 +136,7 @@ def slider_block(
                 value=value,
                 marks=None,
                 updatemode=PROFILE.slider_updatemode,
-                allow_direct_input=False,
+                allow_direct_input=True,
                 tooltip={"placement": "bottom", "always_visible": False},
             ),
         ],
@@ -87,7 +149,7 @@ def data_table(component_id: str, columns: list[str], page_size: int = 8) -> das
         columns=[{"name": column, "id": column} for column in columns],
         data=[],
         page_size=page_size,
-        sort_action="native",
+        sort_action="none",
         style_as_list_view=True,
         style_table={"overflowX": "auto"},
         style_header={
@@ -210,7 +272,7 @@ def build_home_tab() -> html.Div:
                             html.Div(
                                 className="hero-actions",
                                 children=[
-                                    html.Div("Use the tabs above to explore the models", className="cta-tag"),
+                                    html.Div("Use the tabs below to explore the models", className="cta-tag"),
                                     html.Div(
                                         className="watch-pill",
                                         children=[
@@ -279,7 +341,7 @@ def build_home_tab() -> html.Div:
                                 children=[
                                     html.Li("Differential-equation based epidemic simulation"),
                                     html.Li("Intervention scenarios with time-varying transmission"),
-                                    html.Li("Performance profiling from baseline to clientside updates"),
+                                    html.Li("Lightweight interactive controls tuned for fast parameter sweeps"),
                                     html.Li("A portfolio-ready interface instead of notebook-only output"),
                                 ],
                             ),
@@ -289,10 +351,26 @@ def build_home_tab() -> html.Div:
                         className="panel-card",
                         children=[
                             html.H3("Core equations"),
-                            html.Div("dS/dt = -beta * S * I / N", className="equation-line"),
-                            html.Div("dI/dt = beta * S * I / N - gamma * I", className="equation-line"),
-                            html.Div("dR/dt = gamma * I", className="equation-line"),
-                            html.Div("dE/dt = beta * S * I / N - sigma * E", className="equation-line"),
+                            dcc.Markdown(
+                                r"$$\frac{dS}{dt} = -\beta \frac{SI}{N}$$",
+                                mathjax=True,
+                                className="equation-line",
+                            ),
+                            dcc.Markdown(
+                                r"$$\frac{dI}{dt} = \beta \frac{SI}{N} - \gamma I$$",
+                                mathjax=True,
+                                className="equation-line",
+                            ),
+                            dcc.Markdown(
+                                r"$$\frac{dR}{dt} = \gamma I$$",
+                                mathjax=True,
+                                className="equation-line",
+                            ),
+                            dcc.Markdown(
+                                r"$$\frac{dE}{dt} = \beta \frac{SI}{N} - \sigma E$$",
+                                mathjax=True,
+                                className="equation-line",
+                            ),
                         ],
                     ),
                     html.Div(
@@ -326,15 +404,16 @@ def build_home_tab() -> html.Div:
                     html.Div(
                         className="panel-card panel-card--wide",
                         children=[
-                            html.H3("Why this belongs in a portfolio"),
+                            html.H3("Literature-backed disease presets"),
                             html.P(
-                                "This project demonstrates mathematical modeling, scientific computing, "
-                                "interactive visualization, and clear public-facing explanation in one artifact.",
+                                "Use the preset dropdown inside the SIR or SEIR tabs to load published starting "
+                                "parameters. When a value is derived for the simplified teaching model, that is "
+                                "called out explicitly below.",
                                 className="section-note",
                             ),
                             html.Div(
-                                className="equation-line",
-                                children="A good outbreak model is only useful if the assumptions stay legible while the parameters move.",
+                                className="preset-grid",
+                                children=[preset_card(preset) for preset in DISEASE_PRESETS],
                             ),
                         ],
                     ),
@@ -347,6 +426,7 @@ def build_home_tab() -> html.Div:
 def build_model_tab(model_name: str) -> html.Div:
     prefix = model_name.lower()
     controls = [
+        preset_control(model_name),
         slider_block(f"{model_name} population", f"{prefix}-population", 1_000, 500_000, 1_000, 10_000),
         slider_block("Initial infected", f"{prefix}-infected", 1, 1_000, 1, 10),
         slider_block("Transmission rate (beta)", f"{prefix}-beta", 0.05, 1.0, 0.01, 0.30),
@@ -359,13 +439,10 @@ def build_model_tab(model_name: str) -> html.Div:
         controls.insert(2, slider_block("Initial exposed", "seir-exposed", 0, 2_000, 1, 20))
         controls.insert(4, slider_block("Incubation rate (sigma)", "seir-sigma", 0.05, 1.0, 0.01, 0.20))
 
-    helper_text = {
-        "baseline": "Every live drag tick still hits the full Python callback. This is the baseline for comparison.",
-        "step1_no_live_table": "Simulation tables are out of the live path. Use Refresh table after changing sliders.",
-        "step2_split_callbacks": "Graph and metric cards read drag_value. The tables wait for the release value.",
-        "step3_lightweight_figure": "The live path now sends a smaller figure payload while keeping release tables intact.",
-        "step4_clientside": "The graph and metric cards update in browser-side JavaScript. Python only handles the release-only tables.",
-    }[PROFILE.name]
+    helper_text = (
+        "Drag the sliders or type exact values to update the model. Use the literature preset "
+        "dropdown to load paper-backed parameters as a starting point."
+    )
 
     extra_controls = []
     if PROFILE.manual_table_refresh:
@@ -513,8 +590,18 @@ def build_sensitivity_tab() -> html.Div:
                 children=[
                     html.Div(className="graph-card", children=[dcc.Graph(id="sensitivity-graph", config=GRAPH_CONFIG)]),
                     html.Div(
-                        "For SIR, the vertical axis is gamma. For SEIR, it becomes sigma.",
-                        className="mini-note",
+                        className="table-card",
+                        children=[
+                            html.H3("How to read the heatmap"),
+                            html.Ul(
+                                className="feature-list",
+                                children=[
+                                    html.Li("The horizontal axis is beta, so moving right means higher transmission."),
+                                    html.Li("For SIR the vertical axis is gamma, while for SEIR it switches to sigma."),
+                                    html.Li("Brighter regions mark larger values for the selected metric, whether that means a higher peak, a later peak day, or a larger final outbreak share."),
+                                ],
+                            ),
+                        ],
                     ),
                 ],
             ),
@@ -643,12 +730,13 @@ def create_app() -> Dash:
                                 ],
                             ),
                             html.Div(
-                                className="topbar-links",
+                                className="topbar-copy",
                                 children=[
-                            html.Div("MODELS", className="nav-link"),
-                                    html.Div("SCENARIOS", className="nav-link"),
-                                    html.Div("MATH", className="nav-link"),
-                                    html.Div("LIVE", className="nav-cta"),
+                                    html.Div("Fast, paper-backed epidemic modeling", className="topbar-title"),
+                                    html.Div(
+                                        "Use the tabs below to switch between SIR, SEIR, scenarios, sensitivity, and direct model comparison.",
+                                        className="topbar-note",
+                                    ),
                                 ],
                             ),
                         ],
@@ -682,6 +770,37 @@ def register_data_callbacks():
     @callback(Output("assumption-table", "data"), Input("assumption-store", "data"))
     def hydrate_assumption_table(rows):
         return rows
+
+
+def register_preset_callbacks():
+    @callback(
+        Output("sir-beta", "value"),
+        Output("sir-gamma", "value"),
+        Input("sir-preset", "value"),
+        prevent_initial_call=True,
+    )
+    def load_sir_preset(preset_key: str | None):
+        if not preset_key:
+            return no_update, no_update
+        preset = PRESET_BY_KEY[preset_key]
+        return preset.beta, preset.gamma
+
+    @callback(
+        Output("seir-beta", "value"),
+        Output("seir-sigma", "value"),
+        Output("seir-gamma", "value"),
+        Input("seir-preset", "value"),
+        prevent_initial_call=True,
+    )
+    def load_seir_preset(preset_key: str | None):
+        if not preset_key:
+            return no_update, no_update, no_update
+        preset = PRESET_BY_KEY[preset_key]
+        return (
+            preset.beta,
+            preset.sigma if preset.sigma is not None else no_update,
+            preset.gamma,
+        )
 
 
 def live_value(drag_value, release_value):
@@ -1143,24 +1262,28 @@ def register_remaining_callbacks():
     @callback(
         Output("scenario-graph", "figure"),
         Output("scenario-table", "data"),
+        Input("scenario-population", "drag_value"),
         Input("scenario-population", "value"),
+        Input("scenario-infected", "drag_value"),
         Input("scenario-infected", "value"),
+        Input("scenario-beta", "drag_value"),
         Input("scenario-beta", "value"),
+        Input("scenario-gamma", "drag_value"),
         Input("scenario-gamma", "value"),
+        Input("scenario-day", "drag_value"),
         Input("scenario-day", "value"),
     )
-    def update_scenario_tab(
-        population: int,
-        initial_infected: int,
-        beta: float,
-        gamma: float,
-        intervention_day: int,
-    ):
+    def update_scenario_tab(*args):
+        population = live_value(args[0], args[1])
+        initial_infected = live_value(args[2], args[3])
+        beta = live_value(args[4], args[5])
+        gamma = live_value(args[6], args[7])
+        intervention_day = live_value(args[8], args[9])
         scenarios = {
-            "No intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.0),
-            "Weak intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.2),
-            "Moderate intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.4),
-            "Strong intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.6),
+            "No intervention (0% beta reduction)": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.0),
+            "Weak intervention (20% beta reduction)": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.2),
+            "Moderate intervention (40% beta reduction)": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.4),
+            "Strong intervention (60% beta reduction)": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.6),
         }
         return scenario_comparison_figure(scenarios), scenario_summary_rows(scenarios)
 
@@ -1168,19 +1291,20 @@ def register_remaining_callbacks():
         Output("sensitivity-graph", "figure"),
         Input("sensitivity-model", "value"),
         Input("sensitivity-metric", "value"),
+        Input("sensitivity-population", "drag_value"),
         Input("sensitivity-population", "value"),
+        Input("sensitivity-infected", "drag_value"),
         Input("sensitivity-infected", "value"),
+        Input("sensitivity-gamma", "drag_value"),
         Input("sensitivity-gamma", "value"),
+        Input("sensitivity-sigma", "drag_value"),
         Input("sensitivity-sigma", "value"),
     )
-    def update_sensitivity_tab(
-        model_name: str,
-        metric: str,
-        population: int,
-        initial_infected: int,
-        gamma: float,
-        sigma: float,
-    ):
+    def update_sensitivity_tab(model_name: str, metric: str, *args):
+        population = live_value(args[0], args[1])
+        initial_infected = live_value(args[2], args[3])
+        gamma = live_value(args[4], args[5])
+        sigma = live_value(args[6], args[7])
         beta_values = np.round(np.linspace(0.1, 0.7, 16), 3)
         secondary_values = np.round(np.linspace(0.05, 0.4, 15), 3)
         if model_name == "SEIR":
@@ -1200,23 +1324,29 @@ def register_remaining_callbacks():
         Output("comparison-sir-graph", "figure"),
         Output("comparison-seir-graph", "figure"),
         Output("comparison-table", "data"),
+        Input("comparison-population", "drag_value"),
         Input("comparison-population", "value"),
+        Input("comparison-infected", "drag_value"),
         Input("comparison-infected", "value"),
+        Input("comparison-exposed", "drag_value"),
         Input("comparison-exposed", "value"),
+        Input("comparison-beta", "drag_value"),
         Input("comparison-beta", "value"),
+        Input("comparison-sigma", "drag_value"),
         Input("comparison-sigma", "value"),
+        Input("comparison-gamma", "drag_value"),
         Input("comparison-gamma", "value"),
+        Input("comparison-days", "drag_value"),
         Input("comparison-days", "value"),
     )
-    def update_comparison_tab(
-        population: int,
-        initial_infected: int,
-        initial_exposed: int,
-        beta: float,
-        sigma: float,
-        gamma: float,
-        days: int,
-    ):
+    def update_comparison_tab(*args):
+        population = live_value(args[0], args[1])
+        initial_infected = live_value(args[2], args[3])
+        initial_exposed = live_value(args[4], args[5])
+        beta = live_value(args[6], args[7])
+        sigma = live_value(args[8], args[9])
+        gamma = live_value(args[10], args[11])
+        days = live_value(args[12], args[13])
         sir_result = run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=float(days), dt=0.25)
         seir_result = run_seir(population=population, initial_infected=initial_infected, initial_exposed=initial_exposed, beta=beta, sigma=sigma, gamma=gamma, days=float(days), dt=0.25)
         return (
@@ -1229,6 +1359,7 @@ def register_remaining_callbacks():
 app = create_app()
 server = app.server
 register_data_callbacks()
+register_preset_callbacks()
 register_model_callbacks()
 register_remaining_callbacks()
 

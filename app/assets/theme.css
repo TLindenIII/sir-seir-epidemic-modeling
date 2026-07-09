@@ -84,19 +84,18 @@ body::before {
 
 .brand-mark,
 .hero-title,
-.nav-link,
-.nav-cta,
 .control-card h2,
 .panel-card h3,
+.panel-card h4,
 .table-card h3,
 .details-card summary,
 .metric-value,
-.profile-name,
 .visual-title,
 .footer-value,
 .cta-button,
 .watch-pill,
-.brand {
+.brand,
+.topbar-title {
   font-family: "Space Grotesk", sans-serif;
 }
 
@@ -116,49 +115,54 @@ body::before {
   letter-spacing: -0.03em;
 }
 
-.topbar-links {
-  display: flex;
-  align-items: center;
-  gap: 18px;
+.topbar-copy {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+  text-align: right;
 }
 
-.nav-link {
-  font-size: 0.95rem;
+.topbar-title {
+  font-size: 0.98rem;
   letter-spacing: 0.08em;
-  color: var(--muted);
+  text-transform: uppercase;
 }
 
-.nav-cta {
-  background: var(--accent);
-  color: white;
-  padding: 12px 18px;
-  font-size: 0.95rem;
-  letter-spacing: 0.05em;
+.topbar-note {
+  max-width: 560px;
+  color: var(--muted);
+  line-height: 1.55;
 }
 
 .tab-strip {
-  border: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 14px 18px 2px;
+  background: rgba(12, 9, 9, 0.92);
 }
 
 .tab-chip {
   border: none !important;
   background: transparent !important;
-  color: transparent !important;
+  color: inherit !important;
   padding: 0 !important;
 }
 
 .tab-chip > div {
-  border: none !important;
+  margin: 0 10px 12px 0 !important;
+  border: 1px solid var(--line) !important;
   color: var(--muted) !important;
-  background: transparent !important;
-  padding: 16px 22px !important;
+  background: rgba(255, 255, 255, 0.02) !important;
+  padding: 14px 18px !important;
   font-family: "Space Grotesk", sans-serif;
   letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .tab-chip--selected > div {
   color: var(--text) !important;
-  background: rgba(255, 255, 255, 0.04) !important;
+  background: rgba(255, 255, 255, 0.07) !important;
+  border-color: rgba(94, 214, 255, 0.35) !important;
 }
 
 .tab-panel {
@@ -357,6 +361,10 @@ body::before {
   font-size: 0.96rem;
 }
 
+.section-note {
+  line-height: 1.7;
+}
+
 .card-grid {
   display: grid;
   gap: 0;
@@ -408,15 +416,60 @@ body::before {
   background: rgba(255, 255, 255, 0.02);
 }
 
-.profile-badge {
-  display: grid;
-  gap: 14px;
-  align-content: start;
+.equation-line p {
+  margin: 0;
 }
 
-.profile-name {
-  font-size: 2.5rem;
-  letter-spacing: -0.05em;
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.preset-card {
+  display: grid;
+  gap: 10px;
+  padding: 20px 22px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+}
+
+.preset-kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.76rem;
+  color: var(--accent-cool);
+}
+
+.preset-title {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.03em;
+}
+
+.preset-parameters {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--text);
+}
+
+.preset-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.preset-links {
+  line-height: 1.6;
+}
+
+.citation-link {
+  color: var(--accent-cool);
+  text-decoration: none;
+}
+
+.citation-link:hover {
+  text-decoration: underline;
 }
 
 .split-layout {
@@ -463,6 +516,17 @@ body::before {
 .control-label {
   margin-bottom: 12px;
   font-weight: 600;
+}
+
+.dash-slider-container {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 14px;
+  align-items: center;
+}
+
+.dash-slider-container .rc-slider {
+  width: 100%;
 }
 
 .ghost-button {
@@ -523,20 +587,33 @@ body::before {
 }
 
 .radio-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
 .radio-label {
+  display: grid;
+  place-items: center;
+  min-height: 50px;
   padding: 10px 14px;
   border: 1px solid var(--line);
   cursor: pointer;
   background: rgba(255, 255, 255, 0.03);
+  color: var(--muted);
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 .radio-input {
-  margin-right: 8px;
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.radio-label:has(.radio-input:checked) {
+  background: rgba(255, 59, 77, 0.16);
+  border-color: rgba(255, 59, 77, 0.55);
+  color: var(--text);
 }
 
 .dash-dropdown .Select-control,
@@ -544,11 +621,33 @@ body::before {
   background: rgba(255, 255, 255, 0.03) !important;
   border-color: var(--line) !important;
   border-radius: 0 !important;
+  min-height: 48px;
+  box-shadow: none !important;
 }
 
 .Select-menu-outer {
   background: var(--panel) !important;
   border: 1px solid var(--line) !important;
+}
+
+.Select-placeholder,
+.Select-value-label,
+.Select-arrow-zone,
+.VirtualizedSelectOption {
+  color: var(--text) !important;
+}
+
+.Select-placeholder {
+  color: var(--muted) !important;
+}
+
+.VirtualizedSelectFocusedOption {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: var(--text) !important;
+}
+
+.Select-input > input {
+  color: var(--text) !important;
 }
 
 .rc-slider-track {
@@ -572,7 +671,14 @@ body::before {
 }
 
 .dash-slider-container input {
-  display: none;
+  display: block;
+  width: 100%;
+  padding: 11px 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.95rem;
 }
 
 .dash-graph {
@@ -623,7 +729,16 @@ body::before {
     align-items: flex-start;
   }
 
-  .topbar-links {
-    flex-wrap: wrap;
+  .topbar-copy {
+    justify-items: start;
+    text-align: left;
+  }
+}
+
+@media (max-width: 720px) {
+  .dash-slider-container,
+  .preset-grid,
+  .radio-grid {
+    grid-template-columns: 1fr;
   }
 }

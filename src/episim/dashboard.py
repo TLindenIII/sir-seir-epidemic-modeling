@@ -29,6 +29,16 @@ METRIC_SPECS = [
     ("Final outbreak share", "final_outbreak_share"),
     ("Time to extinction", "time_to_extinction"),
 ]
+PARAMETER_LABELS = {
+    "beta": "Beta: β",
+    "gamma": "Gamma: γ",
+    "sigma": "Sigma: σ",
+    "r0": "Basic reproduction number: R₀",
+    "intervention_day": "Intervention day: tᵢ",
+    "intervention_strength": "Intervention strength: Δβ",
+    "dt": "Time step: Δt",
+    "days": "Simulation horizon: T",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +158,7 @@ def metric_strings(summary: SummaryMetrics) -> tuple[str, str, str, str, str]:
 def parameter_rows(parameters: dict[str, float]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for name, value in parameters.items():
+        label = PARAMETER_LABELS.get(name, name.replace("_", " ").capitalize())
         if pd.isna(value):
             display = "None"
         elif name in {"beta", "gamma", "sigma", "intervention_strength", "dt"}:
@@ -158,7 +169,7 @@ def parameter_rows(parameters: dict[str, float]) -> list[dict[str, str]]:
             display = f"{value:.2f}"
         else:
             display = str(value)
-        rows.append({"Parameter": name, "Value": display})
+        rows.append({"Parameter": label, "Value": display})
     return rows
 
 

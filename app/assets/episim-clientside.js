@@ -230,13 +230,18 @@ window.episimPerf = window.episimPerf || {};
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(0,0,0,0)",
         font: { family: "IBM Plex Sans, sans-serif", color: "#f5f0ea" },
-        margin: { l: 20, r: 20, t: 56, b: 24 },
+        margin: { l: 20, r: 20, t: 92, b: 24 },
         height: 500,
-        title: { text: `${result.modelName} compartment dynamics`, x: 0.02 },
+        title: {
+          text: `${result.modelName} compartment dynamics`,
+          x: 0.02,
+          y: 0.97,
+          pad: { b: 22 }
+        },
         legend: {
           orientation: "h",
           yanchor: "bottom",
-          y: 1.02,
+          y: 1.01,
           xanchor: "left",
           x: 0
         },
