@@ -1,15 +1,32 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import os
 
+import numpy as np
 import pandas as pd
-from dash import Dash, Input, Output, callback, dash_table, dcc, html
-
-from episim.plotting import (
-    compartment_figure,
-    scenario_comparison_figure,
-    sensitivity_heatmap,
+from dash import (
+    Dash,
+    ClientsideFunction,
+    Input,
+    Output,
+    State,
+    callback,
+    clientside_callback,
+    dash_table,
+    dcc,
+    html,
 )
+
+from episim.dashboard import (
+    MODEL_COLUMNS,
+    get_profile,
+    live_bundle,
+    live_only_bundle,
+    result_records,
+    run_model,
+    table_bundle,
+)
+from episim.plotting import compartment_figure, scenario_comparison_figure, sensitivity_heatmap
 from episim.simulation import run_seir, run_sir
 from episim.utils import compare_models, summarize_simulation
 
@@ -17,15 +34,45 @@ from episim.utils import compare_models, summarize_simulation
 EXTERNAL_STYLESHEETS = [
     (
         "https://fonts.googleapis.com/css2?"
-        "family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap"
+        "family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@500;700&display=swap"
     )
 ]
 GRAPH_CONFIG = {"displaylogo": False, "responsive": True}
+PROFILE = get_profile(os.getenv("EPISIM_OPTIMIZATION_MODE"))
 ASSUMPTION_ROWS = [
     {"Question": "Has an incubation delay?", "SIR": "No", "SEIR": "Yes"},
     {"Question": "More realistic for latent spread?", "SIR": "Less", "SEIR": "More"},
     {"Question": "Easiest to explain?", "SIR": "Yes", "SEIR": "Slightly harder"},
     {"Question": "Additional parameter", "SIR": "None", "SEIR": "sigma"},
+]
+METRIC_FIELDS = [
+    ("Peak infectious", "peak"),
+    ("Peak day", "peak-day"),
+    ("Final outbreak size", "final-size"),
+    ("Final outbreak share", "final-share"),
+    ("Time to extinction", "extinction"),
+]
+BENCHMARK_ROWS = [
+    {
+        "Profile": "baseline",
+        "Change": "Everything rides the same live Python callback.",
+    },
+    {
+        "Profile": "step1_no_live_table",
+        "Change": "Simulation tables leave the drag path.",
+    },
+    {
+        "Profile": "step2_split_callbacks",
+        "Change": "Live visuals use drag_value while heavy tables wait for mouseup.",
+    },
+    {
+        "Profile": "step3_lightweight_figure",
+        "Change": "The live path redraws a smaller figure payload.",
+    },
+    {
+        "Profile": "step4_clientside",
+        "Change": "Live SIR and SEIR updates run in browser-side JavaScript.",
+    },
 ]
 
 
@@ -48,53 +95,53 @@ def slider_block(
                 step=step,
                 value=value,
                 marks=None,
-                updatemode="drag",
+                updatemode=PROFILE.slider_updatemode,
+                allow_direct_input=False,
                 tooltip={"placement": "bottom", "always_visible": False},
             ),
         ],
     )
 
 
-def metric_cards(summary) -> list[html.Div]:
-    items = [
-        ("Peak infectious", f"{summary.peak_infectious:,.0f}"),
-        ("Peak day", f"{summary.peak_day:.1f}"),
-        ("Final outbreak size", f"{summary.final_outbreak_size:,.0f}"),
-        ("Final outbreak share", f"{summary.final_outbreak_share:.1%}"),
-        (
-            "Time to extinction",
-            f"{summary.time_to_extinction:.1f} days"
-            if summary.time_to_extinction is not None
-            else "Not reached",
-        ),
-    ]
-    return [
-        html.Div(
-            className="metric-card",
-            children=[
-                html.Div(label, className="metric-label"),
-                html.Div(value, className="metric-value"),
-            ],
+def data_table(component_id: str, columns: list[str], page_size: int = 8) -> dash_table.DataTable:
+    return dash_table.DataTable(
+        id=component_id,
+        columns=[{"name": column, "id": column} for column in columns],
+        data=[],
+        page_size=page_size,
+        sort_action="native",
+        style_as_list_view=True,
+        style_table={"overflowX": "auto"},
+        style_header={
+            "backgroundColor": "#151212",
+            "fontWeight": 600,
+            "border": "1px solid rgba(255, 255, 255, 0.14)",
+            "color": "#f4efe8",
+        },
+        style_cell={
+            "padding": "12px 14px",
+            "backgroundColor": "#141010",
+            "border": "1px solid rgba(255, 255, 255, 0.08)",
+            "color": "#d7d0cb",
+            "fontFamily": "IBM Plex Sans, sans-serif",
+            "textAlign": "left",
+        },
+    )
+
+
+def metric_grid(prefix: str) -> html.Div:
+    cards = []
+    for label, suffix in METRIC_FIELDS:
+        cards.append(
+            html.Div(
+                className="metric-card",
+                children=[
+                    html.Div(label, className="metric-label"),
+                    html.Div("--", id=f"{prefix}-metric-{suffix}", className="metric-value"),
+                ],
+            )
         )
-        for label, value in items
-    ]
-
-
-def parameter_rows(parameters: dict[str, float]) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    for name, value in parameters.items():
-        if pd.isna(value):
-            display = "None"
-        elif name in {"beta", "gamma", "sigma", "intervention_strength", "dt"}:
-            display = f"{value:.2f}"
-        elif name in {"days", "intervention_day"}:
-            display = f"{value:.0f}"
-        elif name == "r0":
-            display = f"{value:.2f}"
-        else:
-            display = str(value)
-        rows.append({"Parameter": name, "Value": display})
-    return rows
+    return html.Div(id=f"{prefix}-metrics", className="metric-grid", children=cards)
 
 
 def comparison_rows(frame: pd.DataFrame) -> list[dict[str, str]]:
@@ -128,128 +175,148 @@ def scenario_summary_rows(results: dict[str, object]) -> list[dict[str, str]]:
     return rows
 
 
-def result_records(result, digits: int = 2) -> list[dict[str, float]]:
-    frame = result.dataframe.round(digits)
-    return frame.to_dict("records")
-
-
-@lru_cache(maxsize=512)
-def cached_sir_result(
-    population: int,
-    initial_infected: int,
-    beta: float,
-    gamma: float,
-    days: int,
-    intervention_day: int,
-    intervention_strength: float,
-) :
-    return run_sir(
-        population=population,
-        initial_infected=initial_infected,
-        beta=beta,
-        gamma=gamma,
-        days=float(days),
-        dt=0.25,
-        intervention_day=float(intervention_day),
-        intervention_strength=intervention_strength,
-    )
-
-
-@lru_cache(maxsize=512)
-def cached_seir_result(
-    population: int,
-    initial_infected: int,
-    initial_exposed: int,
-    beta: float,
-    sigma: float,
-    gamma: float,
-    days: int,
-    intervention_day: int,
-    intervention_strength: float,
-) :
-    return run_seir(
-        population=population,
-        initial_infected=initial_infected,
-        initial_exposed=initial_exposed,
-        beta=beta,
-        sigma=sigma,
-        gamma=gamma,
-        days=float(days),
-        dt=0.25,
-        intervention_day=float(intervention_day),
-        intervention_strength=intervention_strength,
-    )
-
-
-def data_table(component_id: str, columns: list[str], page_size: int = 8) -> dash_table.DataTable:
-    return dash_table.DataTable(
-        id=component_id,
-        columns=[{"name": column, "id": column} for column in columns],
-        data=[],
-        page_size=page_size,
-        sort_action="native",
-        style_as_list_view=True,
-        style_table={"overflowX": "auto"},
-        style_header={
-            "backgroundColor": "#f2efe6",
-            "fontWeight": 600,
-            "border": "none",
-            "color": "#172033",
-        },
-        style_cell={
-            "padding": "12px 14px",
-            "backgroundColor": "#fffdf7",
-            "border": "none",
-            "color": "#314056",
-            "fontFamily": "IBM Plex Sans, sans-serif",
-            "textAlign": "left",
-        },
+def profile_badge() -> html.Div:
+    return html.Div(
+        className="profile-badge",
+        children=[
+            html.Div("Active live path", className="profile-kicker"),
+            html.Div(PROFILE.label, className="profile-name"),
+            html.Div(PROFILE.description, className="profile-copy"),
+        ],
     )
 
 
 def build_home_tab() -> html.Div:
-    sir = cached_sir_result(10_000, 10, 0.3, 0.1, 160, 30, 0.4)
-    seir = cached_seir_result(10_000, 10, 20, 0.3, 0.2, 0.1, 160, 30, 0.4)
-    comparison = comparison_rows(compare_models(sir, seir))
+    sir_result = run_sir(
+        population=10_000,
+        initial_infected=10,
+        beta=0.3,
+        gamma=0.1,
+        days=160,
+        dt=0.25,
+        intervention_day=30,
+        intervention_strength=0.4,
+    )
+    seir_result = run_seir(
+        population=10_000,
+        initial_infected=10,
+        initial_exposed=20,
+        beta=0.3,
+        sigma=0.2,
+        gamma=0.1,
+        days=160,
+        dt=0.25,
+        intervention_day=30,
+        intervention_strength=0.4,
+    )
+    comparison = comparison_rows(compare_models(sir_result, seir_result))
+
     return html.Div(
-        className="tab-panel",
+        className="tab-panel home-panel",
         children=[
             html.Div(
-                className="hero-card",
-                children=[
-                    html.Div("Compartmental modeling, without dead UI.", className="eyebrow"),
-                    html.H1(
-                        "Interactive Epidemiological Modeling with SIR and SEIR Simulations",
-                        className="hero-title",
-                    ),
-                    html.P(
-                        "Adjust transmission, recovery, incubation, and interventions with live "
-                        "slider feedback. The dashboard is built for explanation first, but the "
-                        "simulation core is fast enough to stay fluid while you drag.",
-                        className="hero-copy",
-                    ),
-                ],
-            ),
-            html.Div(
-                className="home-grid",
+                className="hero-shell",
                 children=[
                     html.Div(
-                        className="info-card",
+                        className="hero-copy-stack",
                         children=[
-                            html.H3("What this project demonstrates"),
-                            html.Ul(
-                                className="feature-list",
+                            html.Div("Interactive epidemiology lab", className="eyebrow"),
+                            html.H1(
+                                className="hero-title",
                                 children=[
-                                    html.Li("Deterministic SIR and SEIR outbreak simulation"),
-                                    html.Li("Intervention scenarios that flatten and delay the peak"),
-                                    html.Li("Sensitivity analysis across core epidemiological parameters"),
-                                    html.Li("Assumption-aware comparison between SIR and SEIR dynamics"),
+                                    html.Span("SIR & SEIR"),
+                                    html.Br(),
+                                    html.Span("MODELING"),
+                                    html.Br(),
+                                    html.Span("WITH LIVE"),
+                                    html.Br(),
+                                    html.Span("SLIDER FEEDBACK"),
+                                ],
+                            ),
+                            html.Div(className="hero-slash"),
+                            html.P(
+                                "Study outbreak dynamics with a fast deterministic core, compare "
+                                "interventions, and inspect how each performance optimization "
+                                "changes the live interaction path.",
+                                className="hero-copy",
+                            ),
+                            html.Div(
+                                className="hero-actions",
+                                children=[
+                                    html.A("Run benchmarks", href="#performance-lab", className="cta-button"),
+                                    html.Div(
+                                        className="watch-pill",
+                                        children=[
+                                            html.Div("PY", className="watch-avatar"),
+                                            html.Span("Python core, browser live path"),
+                                        ],
+                                    ),
                                 ],
                             ),
                         ],
                     ),
                     html.Div(
-                        className="info-card",
+                        className="hero-visual-card",
+                        children=[
+                            html.Div(className="tunnel-grid"),
+                            html.Div(
+                                className="hero-visual-caption",
+                                children=[
+                                    html.Div("Current mode", className="visual-kicker"),
+                                    html.Div(PROFILE.label, className="visual-title"),
+                                    html.Div(PROFILE.description, className="visual-copy"),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+            html.Div(
+                className="home-footer-strip",
+                children=[
+                    html.Div(
+                        className="footer-chip",
+                        children=[
+                            html.Div("Models", className="footer-label"),
+                            html.Div("SIR, SEIR, comparison, sensitivity", className="footer-value"),
+                        ],
+                    ),
+                    html.Div(
+                        className="footer-chip",
+                        children=[
+                            html.Div("Live path", className="footer-label"),
+                            html.Div(PROFILE.name, className="footer-value"),
+                        ],
+                    ),
+                    html.Div(
+                        className="footer-chip",
+                        children=[
+                            html.Div("Benchmark command", className="footer-label"),
+                            html.Div("python scripts/benchmark_profiles.py", className="footer-value code-inline"),
+                        ],
+                    ),
+                ],
+            ),
+            html.Div(
+                className="card-grid card-grid--home",
+                children=[
+                    html.Div(
+                        className="panel-card",
+                        children=[
+                            html.H3("What this project demonstrates"),
+                            html.Ul(
+                                className="feature-list",
+                                children=[
+                                    html.Li("Differential-equation based epidemic simulation"),
+                                    html.Li("Intervention scenarios with time-varying transmission"),
+                                    html.Li("Performance profiling from baseline to clientside updates"),
+                                    html.Li("A portfolio-ready interface instead of notebook-only output"),
+                                ],
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        className="panel-card",
                         children=[
                             html.H3("Core equations"),
                             html.Div("dS/dt = -beta * S * I / N", className="equation-line"),
@@ -258,14 +325,34 @@ def build_home_tab() -> html.Div:
                             html.Div("dE/dt = beta * S * I / N - sigma * E", className="equation-line"),
                         ],
                     ),
+                    html.Div(
+                        className="panel-card panel-card--wide",
+                        children=[
+                            html.H3("Baseline SIR vs SEIR"),
+                            data_table("home-comparison-table", ["Metric", "SIR", "SEIR"], page_size=6),
+                            dcc.Store(id="home-comparison-store", data=comparison),
+                        ],
+                    ),
                 ],
             ),
             html.Div(
-                className="card-stack",
+                id="performance-lab",
+                className="card-grid card-grid--lab",
                 children=[
-                    html.H3("Baseline SIR vs SEIR"),
-                    data_table("home-comparison-table", ["Metric", "SIR", "SEIR"], page_size=6),
-                    dcc.Store(id="home-comparison-store", data=comparison),
+                    profile_badge(),
+                    html.Div(
+                        className="panel-card panel-card--wide",
+                        children=[
+                            html.H3("Optimization ladder"),
+                            html.P(
+                                "The benchmark script compares the current server or browser live path "
+                                "against every optimization step in sequence.",
+                                className="section-note",
+                            ),
+                            data_table("benchmark-step-table", ["Profile", "Change"], page_size=6),
+                            dcc.Store(id="benchmark-step-store", data=BENCHMARK_ROWS),
+                        ],
+                    ),
                 ],
             ),
         ],
@@ -281,22 +368,25 @@ def build_model_tab(model_name: str) -> html.Div:
         slider_block("Recovery rate (gamma)", f"{prefix}-gamma", 0.02, 0.5, 0.01, 0.10),
         slider_block("Simulation horizon (days)", f"{prefix}-days", 30, 365, 1, 160),
         slider_block("Intervention day", f"{prefix}-intervention-day", 0, 180, 1, 30),
-        slider_block(
-            "Intervention strength",
-            f"{prefix}-intervention-strength",
-            0.0,
-            0.9,
-            0.05,
-            0.4,
-        ),
+        slider_block("Intervention strength", f"{prefix}-intervention-strength", 0.0, 0.9, 0.05, 0.4),
     ]
     if model_name == "SEIR":
         controls.insert(2, slider_block("Initial exposed", "seir-exposed", 0, 2_000, 1, 20))
         controls.insert(4, slider_block("Incubation rate (sigma)", "seir-sigma", 0.05, 1.0, 0.01, 0.20))
 
-    columns = ["day", "Susceptible", "Infectious", "Recovered"]
-    if model_name == "SEIR":
-        columns = ["day", "Susceptible", "Exposed", "Infectious", "Recovered"]
+    helper_text = {
+        "baseline": "Every live drag tick still hits the full Python callback. This is the baseline for comparison.",
+        "step1_no_live_table": "Simulation tables are out of the live path. Use Refresh table after changing sliders.",
+        "step2_split_callbacks": "Graph and metric cards read drag_value. The tables wait for the release value.",
+        "step3_lightweight_figure": "The live path now sends a smaller figure payload while keeping release tables intact.",
+        "step4_clientside": "The graph and metric cards update in browser-side JavaScript. Python only handles the release-only tables.",
+    }[PROFILE.name]
+
+    extra_controls = []
+    if PROFILE.manual_table_refresh:
+        extra_controls.append(
+            html.Button("Refresh table", id=f"{prefix}-table-refresh", className="ghost-button")
+        )
 
     return html.Div(
         className="tab-panel split-layout",
@@ -305,19 +395,19 @@ def build_model_tab(model_name: str) -> html.Div:
                 className="control-card",
                 children=[
                     html.H2(f"{model_name} model"),
-                    html.P(
-                        "Each slider fires while you drag, so the graph and summary cards move "
-                        "continuously instead of waiting for a release event.",
-                        className="section-note",
-                    ),
+                    html.P(helper_text, className="section-note"),
                     *controls,
+                    *extra_controls,
                 ],
             ),
             html.Div(
                 className="content-stack",
                 children=[
-                    dcc.Graph(id=f"{prefix}-graph", config=GRAPH_CONFIG),
-                    html.Div(id=f"{prefix}-metrics", className="metric-grid"),
+                    html.Div(
+                        className="graph-card",
+                        children=[dcc.Graph(id=f"{prefix}-graph", config=GRAPH_CONFIG)],
+                    ),
+                    metric_grid(prefix),
                     html.Div(
                         className="table-card",
                         children=[
@@ -329,7 +419,11 @@ def build_model_tab(model_name: str) -> html.Div:
                         className="details-card",
                         children=[
                             html.Summary("Simulation table"),
-                            data_table(f"{prefix}-simulation-table", columns, page_size=12),
+                            data_table(
+                                f"{prefix}-simulation-table",
+                                MODEL_COLUMNS[model_name],
+                                page_size=12,
+                            ),
                         ],
                     ),
                 ],
@@ -347,8 +441,7 @@ def build_scenario_tab() -> html.Div:
                 children=[
                     html.H2("Scenario Simulator"),
                     html.P(
-                        "Compare how intervention timing changes the infectious curve under the same "
-                        "baseline outbreak conditions.",
+                        "Compare infectious curves across four intervention strengths under the same baseline outbreak.",
                         className="section-note",
                     ),
                     slider_block("Population", "scenario-population", 1_000, 100_000, 1_000, 10_000),
@@ -361,7 +454,7 @@ def build_scenario_tab() -> html.Div:
             html.Div(
                 className="content-stack",
                 children=[
-                    dcc.Graph(id="scenario-graph", config=GRAPH_CONFIG),
+                    html.Div(className="graph-card", children=[dcc.Graph(id="scenario-graph", config=GRAPH_CONFIG)]),
                     html.Div(
                         className="table-card",
                         children=[
@@ -388,8 +481,7 @@ def build_sensitivity_tab() -> html.Div:
                 children=[
                     html.H2("Parameter Sensitivity"),
                     html.P(
-                        "Heatmaps summarize how peak size, timing, and final outbreak share move "
-                        "as model parameters change.",
+                        "Heatmaps summarize how peak size, timing, and total outbreak share move when parameters shift.",
                         className="section-note",
                     ),
                     html.Div(
@@ -434,9 +526,9 @@ def build_sensitivity_tab() -> html.Div:
             html.Div(
                 className="content-stack",
                 children=[
-                    dcc.Graph(id="sensitivity-graph", config=GRAPH_CONFIG),
+                    html.Div(className="graph-card", children=[dcc.Graph(id="sensitivity-graph", config=GRAPH_CONFIG)]),
                     html.Div(
-                        "For SIR, the vertical axis represents gamma. For SEIR, it represents sigma.",
+                        "For SIR, the vertical axis is gamma. For SEIR, it becomes sigma.",
                         className="mini-note",
                     ),
                 ],
@@ -454,7 +546,7 @@ def build_comparison_tab() -> html.Div:
                 children=[
                     html.H2("SIR vs SEIR"),
                     html.P(
-                        "Use shared parameters to compare how a latent compartment shifts the outbreak curve.",
+                        "Use shared inputs to see how adding a latent compartment delays and reshapes the outbreak.",
                         className="section-note",
                     ),
                     slider_block("Population", "comparison-population", 1_000, 100_000, 1_000, 10_000),
@@ -472,8 +564,8 @@ def build_comparison_tab() -> html.Div:
                     html.Div(
                         className="two-up",
                         children=[
-                            dcc.Graph(id="comparison-sir-graph", config=GRAPH_CONFIG),
-                            dcc.Graph(id="comparison-seir-graph", config=GRAPH_CONFIG),
+                            html.Div(className="graph-card", children=[dcc.Graph(id="comparison-sir-graph", config=GRAPH_CONFIG)]),
+                            html.Div(className="graph-card", children=[dcc.Graph(id="comparison-seir-graph", config=GRAPH_CONFIG)]),
                         ],
                     ),
                     html.Div(
@@ -502,38 +594,37 @@ def build_about_tab() -> html.Div:
         className="tab-panel about-grid",
         children=[
             html.Div(
-                className="info-card",
+                className="panel-card",
                 children=[
                     html.H3("SIR intuition"),
                     html.P(
-                        "SIR assumes people move directly from susceptible to infectious to recovered. "
-                        "It is the cleanest model for explaining how beta and gamma compete."
+                        "SIR moves people directly from susceptible to infectious to recovered. "
+                        "It is the cleanest model for showing how beta and gamma compete."
                     ),
                     html.Div("R0 = beta / gamma", className="equation-line"),
                 ],
             ),
             html.Div(
-                className="info-card",
+                className="panel-card",
                 children=[
                     html.H3("SEIR intuition"),
                     html.P(
-                        "SEIR inserts an exposed compartment before infectiousness. That delay makes "
-                        "the curve more realistic when there is a latent period."
+                        "SEIR inserts an exposed compartment before infectiousness, which makes the timing more realistic when spread has a latent phase."
                     ),
                     html.Div("Latent period ~= 1 / sigma", className="equation-line"),
                     html.Div("Recovery period ~= 1 / gamma", className="equation-line"),
                 ],
             ),
             html.Div(
-                className="info-card wide-card",
+                className="panel-card panel-card--wide",
                 children=[
                     html.H3("How to read the controls"),
                     html.Ul(
                         className="feature-list",
                         children=[
                             html.Li("Higher beta pushes the outbreak upward and earlier."),
-                            html.Li("Lower gamma keeps people infectious longer."),
-                            html.Li("Higher sigma moves exposed people into the infectious pool sooner."),
+                            html.Li("Lower gamma keeps infectious people in circulation longer."),
+                            html.Li("Higher sigma moves exposed people into the infectious compartment sooner."),
                             html.Li("A stronger intervention reduces beta after the chosen day."),
                         ],
                     ),
@@ -548,32 +639,49 @@ def create_app() -> Dash:
         __name__,
         external_stylesheets=EXTERNAL_STYLESHEETS,
         title="Interactive Epidemiological Modeling",
+        suppress_callback_exceptions=False,
     )
     application.layout = html.Div(
         className="page-shell",
         children=[
             html.Div(
-                className="topbar",
+                className="frame-shell",
                 children=[
-                    html.Div("EpiSim", className="brand"),
                     html.Div(
-                        "Live deterministic outbreak modeling with drag-updating controls",
-                        className="tagline",
+                        className="topbar",
+                        children=[
+                            html.Div(
+                                className="brand-lockup",
+                                children=[
+                                    html.Div("E", className="brand-mark"),
+                                    html.Div("EpiSim", className="brand"),
+                                ],
+                            ),
+                            html.Div(
+                                className="topbar-links",
+                                children=[
+                                    html.Div("MODELS", className="nav-link"),
+                                    html.Div("BENCHMARKS", className="nav-link"),
+                                    html.Div("MATH", className="nav-link"),
+                                    html.Div(PROFILE.label, className="nav-cta"),
+                                ],
+                            ),
+                        ],
                     ),
-                ],
-            ),
-            dcc.Tabs(
-                id="main-tabs",
-                value="home",
-                className="tab-strip",
-                children=[
-                    dcc.Tab(label="Home", value="home", className="tab-chip", selected_className="tab-chip--selected", children=build_home_tab()),
-                    dcc.Tab(label="SIR Model", value="sir", className="tab-chip", selected_className="tab-chip--selected", children=build_model_tab("SIR")),
-                    dcc.Tab(label="SEIR Model", value="seir", className="tab-chip", selected_className="tab-chip--selected", children=build_model_tab("SEIR")),
-                    dcc.Tab(label="Scenario Simulator", value="scenario", className="tab-chip", selected_className="tab-chip--selected", children=build_scenario_tab()),
-                    dcc.Tab(label="Parameter Sensitivity", value="sensitivity", className="tab-chip", selected_className="tab-chip--selected", children=build_sensitivity_tab()),
-                    dcc.Tab(label="SIR vs SEIR", value="comparison", className="tab-chip", selected_className="tab-chip--selected", children=build_comparison_tab()),
-                    dcc.Tab(label="About the Math", value="about", className="tab-chip", selected_className="tab-chip--selected", children=build_about_tab()),
+                    dcc.Tabs(
+                        id="main-tabs",
+                        value="home",
+                        className="tab-strip",
+                        children=[
+                            dcc.Tab(label="Home", value="home", className="tab-chip", selected_className="tab-chip--selected", children=build_home_tab()),
+                            dcc.Tab(label="SIR Model", value="sir", className="tab-chip", selected_className="tab-chip--selected", children=build_model_tab("SIR")),
+                            dcc.Tab(label="SEIR Model", value="seir", className="tab-chip", selected_className="tab-chip--selected", children=build_model_tab("SEIR")),
+                            dcc.Tab(label="Scenario Simulator", value="scenario", className="tab-chip", selected_className="tab-chip--selected", children=build_scenario_tab()),
+                            dcc.Tab(label="Parameter Sensitivity", value="sensitivity", className="tab-chip", selected_className="tab-chip--selected", children=build_sensitivity_tab()),
+                            dcc.Tab(label="SIR vs SEIR", value="comparison", className="tab-chip", selected_className="tab-chip--selected", children=build_comparison_tab()),
+                            dcc.Tab(label="About the Math", value="about", className="tab-chip", selected_className="tab-chip--selected", children=build_about_tab()),
+                        ],
+                    ),
                 ],
             ),
         ],
@@ -581,218 +689,567 @@ def create_app() -> Dash:
     return application
 
 
+def register_data_callbacks():
+    @callback(Output("home-comparison-table", "data"), Input("home-comparison-store", "data"))
+    def hydrate_home_table(rows):
+        return rows
+
+    @callback(Output("benchmark-step-table", "data"), Input("benchmark-step-store", "data"))
+    def hydrate_benchmark_table(rows):
+        return rows
+
+    @callback(Output("assumption-table", "data"), Input("assumption-store", "data"))
+    def hydrate_assumption_table(rows):
+        return rows
+
+
+def live_value(drag_value, release_value):
+    return release_value if drag_value is None else drag_value
+
+
+def register_model_callbacks():
+    if PROFILE.clientside_live:
+        clientside_callback(
+            ClientsideFunction(namespace="episim", function_name="updateSirLive"),
+            Output("sir-graph", "figure"),
+            Output("sir-metric-peak", "children"),
+            Output("sir-metric-peak-day", "children"),
+            Output("sir-metric-final-size", "children"),
+            Output("sir-metric-final-share", "children"),
+            Output("sir-metric-extinction", "children"),
+            Input("sir-population", "drag_value"),
+            Input("sir-population", "value"),
+            Input("sir-infected", "drag_value"),
+            Input("sir-infected", "value"),
+            Input("sir-beta", "drag_value"),
+            Input("sir-beta", "value"),
+            Input("sir-gamma", "drag_value"),
+            Input("sir-gamma", "value"),
+            Input("sir-days", "drag_value"),
+            Input("sir-days", "value"),
+            Input("sir-intervention-day", "drag_value"),
+            Input("sir-intervention-day", "value"),
+            Input("sir-intervention-strength", "drag_value"),
+            Input("sir-intervention-strength", "value"),
+        )
+        clientside_callback(
+            ClientsideFunction(namespace="episim", function_name="updateSeirLive"),
+            Output("seir-graph", "figure"),
+            Output("seir-metric-peak", "children"),
+            Output("seir-metric-peak-day", "children"),
+            Output("seir-metric-final-size", "children"),
+            Output("seir-metric-final-share", "children"),
+            Output("seir-metric-extinction", "children"),
+            Input("seir-population", "drag_value"),
+            Input("seir-population", "value"),
+            Input("seir-infected", "drag_value"),
+            Input("seir-infected", "value"),
+            Input("seir-exposed", "drag_value"),
+            Input("seir-exposed", "value"),
+            Input("seir-beta", "drag_value"),
+            Input("seir-beta", "value"),
+            Input("seir-sigma", "drag_value"),
+            Input("seir-sigma", "value"),
+            Input("seir-gamma", "drag_value"),
+            Input("seir-gamma", "value"),
+            Input("seir-days", "drag_value"),
+            Input("seir-days", "value"),
+            Input("seir-intervention-day", "drag_value"),
+            Input("seir-intervention-day", "value"),
+            Input("seir-intervention-strength", "drag_value"),
+            Input("seir-intervention-strength", "value"),
+        )
+    elif PROFILE.split_live_and_tables:
+        @callback(
+            Output("sir-graph", "figure"),
+            Output("sir-metric-peak", "children"),
+            Output("sir-metric-peak-day", "children"),
+            Output("sir-metric-final-size", "children"),
+            Output("sir-metric-final-share", "children"),
+            Output("sir-metric-extinction", "children"),
+            Input("sir-population", "drag_value"),
+            Input("sir-population", "value"),
+            Input("sir-infected", "drag_value"),
+            Input("sir-infected", "value"),
+            Input("sir-beta", "drag_value"),
+            Input("sir-beta", "value"),
+            Input("sir-gamma", "drag_value"),
+            Input("sir-gamma", "value"),
+            Input("sir-days", "drag_value"),
+            Input("sir-days", "value"),
+            Input("sir-intervention-day", "drag_value"),
+            Input("sir-intervention-day", "value"),
+            Input("sir-intervention-strength", "drag_value"),
+            Input("sir-intervention-strength", "value"),
+        )
+        def update_sir_live(*args):
+            population = live_value(args[0], args[1])
+            initial_infected = live_value(args[2], args[3])
+            beta = live_value(args[4], args[5])
+            gamma = live_value(args[6], args[7])
+            days = live_value(args[8], args[9])
+            intervention_day = live_value(args[10], args[11])
+            intervention_strength = live_value(args[12], args[13])
+            payload = live_only_bundle(
+                "SIR",
+                lightweight=PROFILE.lightweight_figure,
+                population=population,
+                initial_infected=initial_infected,
+                beta=beta,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+                initial_exposed=0,
+                sigma=0.2,
+            )
+            return (payload["figure"], *payload["metrics"])
+
+        @callback(
+            Output("seir-graph", "figure"),
+            Output("seir-metric-peak", "children"),
+            Output("seir-metric-peak-day", "children"),
+            Output("seir-metric-final-size", "children"),
+            Output("seir-metric-final-share", "children"),
+            Output("seir-metric-extinction", "children"),
+            Input("seir-population", "drag_value"),
+            Input("seir-population", "value"),
+            Input("seir-infected", "drag_value"),
+            Input("seir-infected", "value"),
+            Input("seir-exposed", "drag_value"),
+            Input("seir-exposed", "value"),
+            Input("seir-beta", "drag_value"),
+            Input("seir-beta", "value"),
+            Input("seir-sigma", "drag_value"),
+            Input("seir-sigma", "value"),
+            Input("seir-gamma", "drag_value"),
+            Input("seir-gamma", "value"),
+            Input("seir-days", "drag_value"),
+            Input("seir-days", "value"),
+            Input("seir-intervention-day", "drag_value"),
+            Input("seir-intervention-day", "value"),
+            Input("seir-intervention-strength", "drag_value"),
+            Input("seir-intervention-strength", "value"),
+        )
+        def update_seir_live(*args):
+            population = live_value(args[0], args[1])
+            initial_infected = live_value(args[2], args[3])
+            initial_exposed = live_value(args[4], args[5])
+            beta = live_value(args[6], args[7])
+            sigma = live_value(args[8], args[9])
+            gamma = live_value(args[10], args[11])
+            days = live_value(args[12], args[13])
+            intervention_day = live_value(args[14], args[15])
+            intervention_strength = live_value(args[16], args[17])
+            payload = live_only_bundle(
+                "SEIR",
+                lightweight=PROFILE.lightweight_figure,
+                population=population,
+                initial_infected=initial_infected,
+                initial_exposed=initial_exposed,
+                beta=beta,
+                sigma=sigma,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+            )
+            return (payload["figure"], *payload["metrics"])
+    else:
+        @callback(
+            Output("sir-graph", "figure"),
+            Output("sir-metric-peak", "children"),
+            Output("sir-metric-peak-day", "children"),
+            Output("sir-metric-final-size", "children"),
+            Output("sir-metric-final-share", "children"),
+            Output("sir-metric-extinction", "children"),
+            Output("sir-parameter-table", "data"),
+            Input("sir-population", "value"),
+            Input("sir-infected", "value"),
+            Input("sir-beta", "value"),
+            Input("sir-gamma", "value"),
+            Input("sir-days", "value"),
+            Input("sir-intervention-day", "value"),
+            Input("sir-intervention-strength", "value"),
+        )
+        def update_sir_baseline(
+            population: int,
+            initial_infected: int,
+            beta: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            payload = live_bundle(
+                "SIR",
+                lightweight=PROFILE.lightweight_figure,
+                population=population,
+                initial_infected=initial_infected,
+                beta=beta,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+                initial_exposed=0,
+                sigma=0.2,
+            )
+            return (payload["figure"], *payload["metrics"], payload["parameters"])
+
+        @callback(
+            Output("seir-graph", "figure"),
+            Output("seir-metric-peak", "children"),
+            Output("seir-metric-peak-day", "children"),
+            Output("seir-metric-final-size", "children"),
+            Output("seir-metric-final-share", "children"),
+            Output("seir-metric-extinction", "children"),
+            Output("seir-parameter-table", "data"),
+            Input("seir-population", "value"),
+            Input("seir-infected", "value"),
+            Input("seir-exposed", "value"),
+            Input("seir-beta", "value"),
+            Input("seir-sigma", "value"),
+            Input("seir-gamma", "value"),
+            Input("seir-days", "value"),
+            Input("seir-intervention-day", "value"),
+            Input("seir-intervention-strength", "value"),
+        )
+        def update_seir_baseline(
+            population: int,
+            initial_infected: int,
+            initial_exposed: int,
+            beta: float,
+            sigma: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            payload = live_bundle(
+                "SEIR",
+                lightweight=PROFILE.lightweight_figure,
+                population=population,
+                initial_infected=initial_infected,
+                initial_exposed=initial_exposed,
+                beta=beta,
+                sigma=sigma,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+            )
+            return (payload["figure"], *payload["metrics"], payload["parameters"])
+
+    if PROFILE.name == "baseline":
+        @callback(
+            Output("sir-simulation-table", "data"),
+            Input("sir-population", "value"),
+            Input("sir-infected", "value"),
+            Input("sir-beta", "value"),
+            Input("sir-gamma", "value"),
+            Input("sir-days", "value"),
+            Input("sir-intervention-day", "value"),
+            Input("sir-intervention-strength", "value"),
+        )
+        def update_sir_baseline_table(
+            population: int,
+            initial_infected: int,
+            beta: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            return result_records(
+                run_model(
+                    "SIR",
+                    population=population,
+                    initial_infected=initial_infected,
+                    beta=beta,
+                    gamma=gamma,
+                    days=days,
+                    intervention_day=intervention_day,
+                    intervention_strength=intervention_strength,
+                    initial_exposed=0,
+                    sigma=0.2,
+                )
+            )
+
+        @callback(
+            Output("seir-simulation-table", "data"),
+            Input("seir-population", "value"),
+            Input("seir-infected", "value"),
+            Input("seir-exposed", "value"),
+            Input("seir-beta", "value"),
+            Input("seir-sigma", "value"),
+            Input("seir-gamma", "value"),
+            Input("seir-days", "value"),
+            Input("seir-intervention-day", "value"),
+            Input("seir-intervention-strength", "value"),
+        )
+        def update_seir_baseline_table(
+            population: int,
+            initial_infected: int,
+            initial_exposed: int,
+            beta: float,
+            sigma: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            return result_records(
+                run_model(
+                    "SEIR",
+                    population=population,
+                    initial_infected=initial_infected,
+                    initial_exposed=initial_exposed,
+                    beta=beta,
+                    sigma=sigma,
+                    gamma=gamma,
+                    days=days,
+                    intervention_day=intervention_day,
+                    intervention_strength=intervention_strength,
+                )
+            )
+    elif PROFILE.manual_table_refresh:
+        @callback(
+            Output("sir-simulation-table", "data"),
+            Input("sir-table-refresh", "n_clicks"),
+            State("sir-population", "value"),
+            State("sir-infected", "value"),
+            State("sir-beta", "value"),
+            State("sir-gamma", "value"),
+            State("sir-days", "value"),
+            State("sir-intervention-day", "value"),
+            State("sir-intervention-strength", "value"),
+        )
+        def refresh_sir_table(
+            _clicks: int | None,
+            population: int,
+            initial_infected: int,
+            beta: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            return table_bundle(
+                "SIR",
+                population=population,
+                initial_infected=initial_infected,
+                beta=beta,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+                initial_exposed=0,
+                sigma=0.2,
+            )["simulation"]
+
+        @callback(
+            Output("seir-simulation-table", "data"),
+            Input("seir-table-refresh", "n_clicks"),
+            State("seir-population", "value"),
+            State("seir-infected", "value"),
+            State("seir-exposed", "value"),
+            State("seir-beta", "value"),
+            State("seir-sigma", "value"),
+            State("seir-gamma", "value"),
+            State("seir-days", "value"),
+            State("seir-intervention-day", "value"),
+            State("seir-intervention-strength", "value"),
+        )
+        def refresh_seir_table(
+            _clicks: int | None,
+            population: int,
+            initial_infected: int,
+            initial_exposed: int,
+            beta: float,
+            sigma: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            return table_bundle(
+                "SEIR",
+                population=population,
+                initial_infected=initial_infected,
+                initial_exposed=initial_exposed,
+                beta=beta,
+                sigma=sigma,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+            )["simulation"]
+    else:
+        @callback(
+            Output("sir-parameter-table", "data"),
+            Output("sir-simulation-table", "data"),
+            Input("sir-population", "value"),
+            Input("sir-infected", "value"),
+            Input("sir-beta", "value"),
+            Input("sir-gamma", "value"),
+            Input("sir-days", "value"),
+            Input("sir-intervention-day", "value"),
+            Input("sir-intervention-strength", "value"),
+        )
+        def update_sir_tables(
+            population: int,
+            initial_infected: int,
+            beta: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            bundle = table_bundle(
+                "SIR",
+                population=population,
+                initial_infected=initial_infected,
+                beta=beta,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+                initial_exposed=0,
+                sigma=0.2,
+            )
+            return bundle["parameters"], bundle["simulation"]
+
+        @callback(
+            Output("seir-parameter-table", "data"),
+            Output("seir-simulation-table", "data"),
+            Input("seir-population", "value"),
+            Input("seir-infected", "value"),
+            Input("seir-exposed", "value"),
+            Input("seir-beta", "value"),
+            Input("seir-sigma", "value"),
+            Input("seir-gamma", "value"),
+            Input("seir-days", "value"),
+            Input("seir-intervention-day", "value"),
+            Input("seir-intervention-strength", "value"),
+        )
+        def update_seir_tables(
+            population: int,
+            initial_infected: int,
+            initial_exposed: int,
+            beta: float,
+            sigma: float,
+            gamma: float,
+            days: int,
+            intervention_day: int,
+            intervention_strength: float,
+        ):
+            bundle = table_bundle(
+                "SEIR",
+                population=population,
+                initial_infected=initial_infected,
+                initial_exposed=initial_exposed,
+                beta=beta,
+                sigma=sigma,
+                gamma=gamma,
+                days=days,
+                intervention_day=intervention_day,
+                intervention_strength=intervention_strength,
+            )
+            return bundle["parameters"], bundle["simulation"]
+
+
+def register_remaining_callbacks():
+    @callback(
+        Output("scenario-graph", "figure"),
+        Output("scenario-table", "data"),
+        Input("scenario-population", "value"),
+        Input("scenario-infected", "value"),
+        Input("scenario-beta", "value"),
+        Input("scenario-gamma", "value"),
+        Input("scenario-day", "value"),
+    )
+    def update_scenario_tab(
+        population: int,
+        initial_infected: int,
+        beta: float,
+        gamma: float,
+        intervention_day: int,
+    ):
+        scenarios = {
+            "No intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.0),
+            "Weak intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.2),
+            "Moderate intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.4),
+            "Strong intervention": run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=160, dt=0.25, intervention_day=intervention_day, intervention_strength=0.6),
+        }
+        return scenario_comparison_figure(scenarios), scenario_summary_rows(scenarios)
+
+    @callback(
+        Output("sensitivity-graph", "figure"),
+        Input("sensitivity-model", "value"),
+        Input("sensitivity-metric", "value"),
+        Input("sensitivity-population", "value"),
+        Input("sensitivity-infected", "value"),
+        Input("sensitivity-gamma", "value"),
+        Input("sensitivity-sigma", "value"),
+    )
+    def update_sensitivity_tab(
+        model_name: str,
+        metric: str,
+        population: int,
+        initial_infected: int,
+        gamma: float,
+        sigma: float,
+    ):
+        beta_values = np.round(np.linspace(0.1, 0.7, 16), 3)
+        secondary_values = np.round(np.linspace(0.05, 0.4, 15), 3)
+        if model_name == "SEIR":
+            secondary_values = np.round(np.linspace(0.05, 0.6, 15), 3)
+        return sensitivity_heatmap(
+            model_name=model_name,
+            population=population,
+            initial_infected=initial_infected,
+            gamma=gamma,
+            sigma=sigma,
+            metric=metric,
+            beta_values=beta_values,
+            secondary_values=secondary_values,
+        )
+
+    @callback(
+        Output("comparison-sir-graph", "figure"),
+        Output("comparison-seir-graph", "figure"),
+        Output("comparison-table", "data"),
+        Input("comparison-population", "value"),
+        Input("comparison-infected", "value"),
+        Input("comparison-exposed", "value"),
+        Input("comparison-beta", "value"),
+        Input("comparison-sigma", "value"),
+        Input("comparison-gamma", "value"),
+        Input("comparison-days", "value"),
+    )
+    def update_comparison_tab(
+        population: int,
+        initial_infected: int,
+        initial_exposed: int,
+        beta: float,
+        sigma: float,
+        gamma: float,
+        days: int,
+    ):
+        sir_result = run_sir(population=population, initial_infected=initial_infected, beta=beta, gamma=gamma, days=float(days), dt=0.25)
+        seir_result = run_seir(population=population, initial_infected=initial_infected, initial_exposed=initial_exposed, beta=beta, sigma=sigma, gamma=gamma, days=float(days), dt=0.25)
+        return (
+            compartment_figure(sir_result),
+            compartment_figure(seir_result),
+            comparison_rows(compare_models(sir_result, seir_result)),
+        )
+
+
 app = create_app()
 server = app.server
-
-
-@callback(Output("home-comparison-table", "data"), Input("home-comparison-store", "data"))
-def hydrate_home_table(rows):
-    return rows
-
-
-@callback(Output("assumption-table", "data"), Input("assumption-store", "data"))
-def hydrate_assumption_table(rows):
-    return rows
-
-
-@callback(
-    Output("sir-graph", "figure"),
-    Output("sir-metrics", "children"),
-    Output("sir-parameter-table", "data"),
-    Output("sir-simulation-table", "data"),
-    Input("sir-population", "value"),
-    Input("sir-infected", "value"),
-    Input("sir-beta", "value"),
-    Input("sir-gamma", "value"),
-    Input("sir-days", "value"),
-    Input("sir-intervention-day", "value"),
-    Input("sir-intervention-strength", "value"),
-)
-def update_sir_tab(
-    population: int,
-    initial_infected: int,
-    beta: float,
-    gamma: float,
-    days: int,
-    intervention_day: int,
-    intervention_strength: float,
-):
-    result = cached_sir_result(
-        population,
-        initial_infected,
-        beta,
-        gamma,
-        days,
-        intervention_day,
-        intervention_strength,
-    )
-    summary = summarize_simulation(result)
-    return (
-        compartment_figure(result),
-        metric_cards(summary),
-        parameter_rows(result.parameters),
-        result_records(result),
-    )
-
-
-@callback(
-    Output("seir-graph", "figure"),
-    Output("seir-metrics", "children"),
-    Output("seir-parameter-table", "data"),
-    Output("seir-simulation-table", "data"),
-    Input("seir-population", "value"),
-    Input("seir-infected", "value"),
-    Input("seir-exposed", "value"),
-    Input("seir-beta", "value"),
-    Input("seir-sigma", "value"),
-    Input("seir-gamma", "value"),
-    Input("seir-days", "value"),
-    Input("seir-intervention-day", "value"),
-    Input("seir-intervention-strength", "value"),
-)
-def update_seir_tab(
-    population: int,
-    initial_infected: int,
-    initial_exposed: int,
-    beta: float,
-    sigma: float,
-    gamma: float,
-    days: int,
-    intervention_day: int,
-    intervention_strength: float,
-):
-    result = cached_seir_result(
-        population,
-        initial_infected,
-        initial_exposed,
-        beta,
-        sigma,
-        gamma,
-        days,
-        intervention_day,
-        intervention_strength,
-    )
-    summary = summarize_simulation(result)
-    return (
-        compartment_figure(result),
-        metric_cards(summary),
-        parameter_rows(result.parameters),
-        result_records(result),
-    )
-
-
-@callback(
-    Output("scenario-graph", "figure"),
-    Output("scenario-table", "data"),
-    Input("scenario-population", "value"),
-    Input("scenario-infected", "value"),
-    Input("scenario-beta", "value"),
-    Input("scenario-gamma", "value"),
-    Input("scenario-day", "value"),
-)
-def update_scenario_tab(
-    population: int,
-    initial_infected: int,
-    beta: float,
-    gamma: float,
-    intervention_day: int,
-):
-    scenarios = {
-        "No intervention": cached_sir_result(
-            population, initial_infected, beta, gamma, 160, intervention_day, 0.0
-        ),
-        "Weak intervention": cached_sir_result(
-            population, initial_infected, beta, gamma, 160, intervention_day, 0.2
-        ),
-        "Moderate intervention": cached_sir_result(
-            population, initial_infected, beta, gamma, 160, intervention_day, 0.4
-        ),
-        "Strong intervention": cached_sir_result(
-            population, initial_infected, beta, gamma, 160, intervention_day, 0.6
-        ),
-    }
-    return scenario_comparison_figure(scenarios), scenario_summary_rows(scenarios)
-
-
-@callback(
-    Output("sensitivity-graph", "figure"),
-    Input("sensitivity-model", "value"),
-    Input("sensitivity-metric", "value"),
-    Input("sensitivity-population", "value"),
-    Input("sensitivity-infected", "value"),
-    Input("sensitivity-gamma", "value"),
-    Input("sensitivity-sigma", "value"),
-)
-def update_sensitivity_tab(
-    model_name: str,
-    metric: str,
-    population: int,
-    initial_infected: int,
-    gamma: float,
-    sigma: float,
-):
-    secondary_values = (
-        pd.Series([round(0.05 + idx * 0.025, 3) for idx in range(15)]).to_numpy()
-        if model_name == "SIR"
-        else pd.Series([round(0.05 + idx * 0.039, 3) for idx in range(15)]).to_numpy()
-    )
-    beta_values = pd.Series([round(0.1 + idx * 0.04, 3) for idx in range(16)]).to_numpy()
-    return sensitivity_heatmap(
-        model_name=model_name,
-        population=population,
-        initial_infected=initial_infected,
-        gamma=gamma,
-        sigma=sigma,
-        metric=metric,
-        beta_values=beta_values,
-        secondary_values=secondary_values,
-    )
-
-
-@callback(
-    Output("comparison-sir-graph", "figure"),
-    Output("comparison-seir-graph", "figure"),
-    Output("comparison-table", "data"),
-    Input("comparison-population", "value"),
-    Input("comparison-infected", "value"),
-    Input("comparison-exposed", "value"),
-    Input("comparison-beta", "value"),
-    Input("comparison-sigma", "value"),
-    Input("comparison-gamma", "value"),
-    Input("comparison-days", "value"),
-)
-def update_comparison_tab(
-    population: int,
-    initial_infected: int,
-    initial_exposed: int,
-    beta: float,
-    sigma: float,
-    gamma: float,
-    days: int,
-):
-    sir_result = run_sir(
-        population=population,
-        initial_infected=initial_infected,
-        beta=beta,
-        gamma=gamma,
-        days=float(days),
-        dt=0.25,
-    )
-    seir_result = run_seir(
-        population=population,
-        initial_infected=initial_infected,
-        initial_exposed=initial_exposed,
-        beta=beta,
-        sigma=sigma,
-        gamma=gamma,
-        days=float(days),
-        dt=0.25,
-    )
-    return (
-        compartment_figure(sir_result),
-        compartment_figure(seir_result),
-        comparison_rows(compare_models(sir_result, seir_result)),
-    )
+register_data_callbacks()
+register_model_callbacks()
+register_remaining_callbacks()
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import numpy as np
 import plotly.graph_objects as go
 
 from .simulation import SimulationResult
@@ -9,29 +10,29 @@ from .utils import sensitivity_grid, summarize_simulation
 
 
 COLOR_MAP = {
-    "Susceptible": "#1d4ed8",
-    "Exposed": "#f59e0b",
-    "Infectious": "#dc2626",
-    "Recovered": "#16a34a",
+    "Susceptible": "#f4efe8",
+    "Exposed": "#ff9f43",
+    "Infectious": "#ff3b4d",
+    "Recovered": "#5ed6ff",
 }
 
 SCENARIO_COLORS = {
-    "No intervention": "#b91c1c",
-    "Weak intervention": "#ea580c",
-    "Moderate intervention": "#0284c7",
-    "Strong intervention": "#0f766e",
+    "No intervention": "#ff3b4d",
+    "Weak intervention": "#ff7a36",
+    "Moderate intervention": "#ffd166",
+    "Strong intervention": "#5ed6ff",
 }
 
 
 def _figure_layout(title: str, height: int = 500) -> dict:
     return {
-        "template": "plotly_white",
+        "template": "plotly_dark",
         "height": height,
-        "margin": {"l": 20, "r": 20, "t": 56, "b": 20},
+        "margin": {"l": 20, "r": 20, "t": 56, "b": 24},
         "title": {"text": title, "x": 0.02},
-        "paper_bgcolor": "#fffdf7",
-        "plot_bgcolor": "#fffdf7",
-        "font": {"family": "IBM Plex Sans, sans-serif", "color": "#172033"},
+        "paper_bgcolor": "rgba(0, 0, 0, 0)",
+        "plot_bgcolor": "rgba(0, 0, 0, 0)",
+        "font": {"family": "IBM Plex Sans, sans-serif", "color": "#f5f0ea"},
         "legend": {
             "orientation": "h",
             "yanchor": "bottom",
@@ -39,35 +40,76 @@ def _figure_layout(title: str, height: int = 500) -> dict:
             "xanchor": "left",
             "x": 0.0,
         },
-        "xaxis": {"gridcolor": "rgba(15, 23, 42, 0.08)", "zeroline": False},
-        "yaxis": {"gridcolor": "rgba(15, 23, 42, 0.08)", "zeroline": False},
+        "xaxis": {"gridcolor": "rgba(255, 255, 255, 0.08)", "zeroline": False},
+        "yaxis": {"gridcolor": "rgba(255, 255, 255, 0.08)", "zeroline": False},
     }
 
 
-def compartment_figure(result: SimulationResult) -> go.Figure:
-    figure = go.Figure()
+def _downsample_indices(length: int, max_points: int | None) -> np.ndarray:
+    if max_points is None or length <= max_points:
+        return np.arange(length)
+
+    step = int(np.ceil(length / max_points))
+    indices = np.arange(0, length, step, dtype=int)
+    if indices[-1] != length - 1:
+        indices = np.append(indices, length - 1)
+    return indices
+
+
+def compartment_figure_dict(
+    result: SimulationResult,
+    *,
+    max_points: int | None = None,
+    use_webgl: bool = False,
+) -> dict:
+    indices = _downsample_indices(len(result.time), max_points)
+    summary = summarize_simulation(result)
+    trace_type = "scattergl" if use_webgl else "scatter"
+    data = []
+
     for name, values in result.compartments.items():
-        figure.add_trace(
-            go.Scatter(
-                x=result.time,
-                y=values,
-                mode="lines",
-                name=name,
-                line={"width": 3, "color": COLOR_MAP.get(name, "#334155")},
-            )
+        data.append(
+            {
+                "type": trace_type,
+                "x": result.time[indices].tolist(),
+                "y": values[indices].tolist(),
+                "mode": "lines",
+                "name": name,
+                "line": {"width": 3, "color": COLOR_MAP.get(name, "#e2d8cd")},
+            }
         )
 
-    summary = summarize_simulation(result)
-    figure.add_vline(
-        x=summary.peak_day,
-        line_dash="dash",
-        line_color="#0f172a",
-        annotation_text=f"Peak day {summary.peak_day:.1f}",
-    )
-    figure.update_layout(**_figure_layout(f"{result.model_name} compartment dynamics"))
-    figure.update_xaxes(title="Day")
-    figure.update_yaxes(title="People")
-    return figure
+    layout = _figure_layout(f"{result.model_name} compartment dynamics")
+    layout["xaxis"]["title"] = "Day"
+    layout["yaxis"]["title"] = "People"
+    layout["shapes"] = [
+        {
+            "type": "line",
+            "xref": "x",
+            "yref": "paper",
+            "x0": summary.peak_day,
+            "x1": summary.peak_day,
+            "y0": 0,
+            "y1": 1,
+            "line": {"dash": "dash", "color": "#f4efe8", "width": 1},
+        }
+    ]
+    layout["annotations"] = [
+        {
+            "x": summary.peak_day,
+            "y": 1.03,
+            "xref": "x",
+            "yref": "paper",
+            "text": f"Peak day {summary.peak_day:.1f}",
+            "showarrow": False,
+            "font": {"size": 12, "color": "#f4efe8"},
+        }
+    ]
+    return {"data": data, "layout": layout}
+
+
+def compartment_figure(result: SimulationResult) -> go.Figure:
+    return go.Figure(compartment_figure_dict(result))
 
 
 def scenario_comparison_figure(
