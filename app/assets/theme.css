@@ -115,25 +115,6 @@ body::before {
   letter-spacing: -0.03em;
 }
 
-.topbar-copy {
-  display: grid;
-  gap: 6px;
-  justify-items: end;
-  text-align: right;
-}
-
-.topbar-title {
-  font-size: 0.98rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.topbar-note {
-  max-width: 560px;
-  color: var(--muted);
-  line-height: 1.55;
-}
-
 .tab-strip {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -592,7 +573,8 @@ body::before {
   gap: 10px;
 }
 
-.radio-label {
+.radio-label,
+.dash-options-list.radio-grid > label.dash-options-list-option {
   display: grid;
   place-items: center;
   min-height: 50px;
@@ -610,7 +592,8 @@ body::before {
   pointer-events: none;
 }
 
-.radio-label:has(.radio-input:checked) {
+.radio-label:has(.radio-input:checked),
+.dash-options-list.radio-grid > label.dash-options-list-option.selected {
   background: rgba(255, 59, 77, 0.16);
   border-color: rgba(255, 59, 77, 0.55);
   color: var(--text);
@@ -648,6 +631,47 @@ body::before {
 
 .Select-input > input {
   color: var(--text) !important;
+}
+
+.dash-dropdown-wrapper {
+  color: var(--text) !important;
+}
+
+button.dash-dropdown,
+button.dash-dropdown:hover,
+button.dash-dropdown:focus-visible,
+.dash-dropdown-content {
+  background: rgba(255, 255, 255, 0.03) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: none !important;
+}
+
+.dash-dropdown-grid-container {
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+
+.dash-dropdown-search,
+.dash-dropdown-focus-target {
+  background: transparent !important;
+  color: var(--text) !important;
+  caret-color: var(--text) !important;
+}
+
+.dash-dropdown .dash-dropdown-menu,
+.dash-dropdown-options {
+  background: var(--panel) !important;
+  color: var(--text) !important;
+}
+
+.dash-dropdown-option {
+  background: transparent !important;
+  color: var(--text) !important;
+}
+
+.dash-dropdown-option:hover,
+.dash-dropdown-option--selected {
+  background: rgba(255, 255, 255, 0.08) !important;
 }
 
 .rc-slider-track {
@@ -727,11 +751,6 @@ body::before {
   .topbar {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .topbar-copy {
-    justify-items: start;
-    text-align: left;
   }
 }
 

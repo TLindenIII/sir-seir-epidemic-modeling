@@ -729,16 +729,6 @@ def create_app() -> Dash:
                                     html.Div("EpiSim", className="brand"),
                                 ],
                             ),
-                            html.Div(
-                                className="topbar-copy",
-                                children=[
-                                    html.Div("Fast, paper-backed epidemic modeling", className="topbar-title"),
-                                    html.Div(
-                                        "Use the tabs below to switch between SIR, SEIR, scenarios, sensitivity, and direct model comparison.",
-                                        className="topbar-note",
-                                    ),
-                                ],
-                            ),
                         ],
                     ),
                     dcc.Tabs(
